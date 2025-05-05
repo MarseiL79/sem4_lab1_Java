@@ -1,18 +1,26 @@
+// Bird.java
 import java.awt.Graphics;
 import java.awt.Image;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.Serializable;
 
-public abstract class Bird implements IBehaviour {
-    protected int x, y;           // координаты объекта
-    protected int width, height;  // размеры для отрисовки изображения
-    protected Image image;        // изображение птицы
+public abstract class Bird implements IBehaviour, Serializable {
+    private static final long serialVersionUID = 1L;
+
+    protected int x, y;           // координаты
+    protected int width, height;  // размеры для отрисовки
+
+    // Изображение — transient, чтобы оно не шло в сериализацию
+    protected transient Image image;
 
     // Новые поля
     protected long birthTime;     // время рождения (мс)
     protected long lifetime;      // время жизни (мс)
     protected int id;             // уникальный идентификатор
 
-    // Изменённый конструктор: добавлены birthTime, lifetime и id
-    public Bird(int x, int y, int width, int height, Image image, long birthTime, long lifetime, int id) {
+    public Bird(int x, int y, int width, int height,
+                Image image, long birthTime, long lifetime, int id) {
         this.x = x;
         this.y = y;
         this.width = width;
@@ -23,10 +31,19 @@ public abstract class Bird implements IBehaviour {
         this.id = id;
     }
 
-    // Абстрактный метод обновления состояния (движения) объекта
+    // Восстанавливаем image после десериализации
+    private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
+        in.defaultReadObject();
+        loadImage();
+    }
+
+    /** Каждый подкласс знает, из какого файла подгружать своё изображение */
+    protected abstract void loadImage();
+
+    // Абстрактный метод обновления состояния (движения)
     public abstract void update(long elapsedTime);
 
-    // Отрисовка изображения
+    // Отрисовка
     @Override
     public void draw(Graphics g) {
         if (image != null) {

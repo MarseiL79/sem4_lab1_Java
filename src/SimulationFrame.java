@@ -1,177 +1,150 @@
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
+import java.io.*;
 import java.util.HashMap;
+import java.util.Properties;
+import java.io.PipedReader;
+import java.io.PipedWriter;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public class SimulationFrame extends JFrame implements ActionListener, KeyListener {
-
-    private Habitat habitat;
-    private Timer timer;
-    private long startTime;
-    private boolean running;
-    private boolean showTime;         // Показывать/скрывать время симуляции
-    private boolean showInfoEnabled;  // Показывать диалог статистики
-
-    // UI
-    private SimulationPanel simPanel;
-    private JPanel controlPanel;
-
-    // Кнопки симуляции
-    private JButton startButton;
-    private JButton stopButton;
-    private JButton currentObjectsButton;
-
-    // Элементы управления информацией и временем
-    private JCheckBox showInfoCheckBox;
-    private JRadioButton showTimeRadio;
-    private JRadioButton hideTimeRadio;
-
-    // Текстовые поля для периодов генерации
-    private JTextField adultPeriodField;
-    private JTextField chickPeriodField;
-    // текстовые поля для времени жизни
-    private JTextField adultLifetimeField;
-    private JTextField chickLifetimeField;
-
-    // задание вероятности генерации
-    private JComboBox<String> probabilityComboBox;
-    private JList<String> probabilityList;
-
-    // Меню и панель инструментов
-    private JMenuBar menuBar;
-    private JToolBar toolBar;
-
-    //  поля для потоков
-    private AdultBirdAI adultAI;
-    private ChickAI chickAI;
-
-    // константы
-    public static final int FRAME_WIDTH = 1200;
-    public static final int FRAME_HEIGHT = 800;
-    public static final int SIM_PANEL_WIDTH = 800;
-    public static final int SIM_PANEL_HEIGHT = 800;
+    public static final int FRAME_WIDTH = 1200, FRAME_HEIGHT = 800;
+    public static final int SIM_PANEL_WIDTH = 800, SIM_PANEL_HEIGHT = 800;
     public static final int UPDATE_INTERVAL = 50;  // мс
 
+    private static final String CONFIG_FILE = "config.txt";
     private static final int DEFAULT_ADULT_PERIOD = 2000;
     private static final int DEFAULT_CHICK_PERIOD = 3000;
     private static final double DEFAULT_ADULT_PROB = 0.5;
     private static final int DEFAULT_K_PERCENT = 30;
-    private static final long DEFAULT_ADULT_LIFETIME = 10000; // мс (10 секунд)
-    private static final long DEFAULT_CHICK_LIFETIME = 5000;  // мс (5 секунд)
+    private static final long DEFAULT_ADULT_LIFETIME = 10000;
+    private static final long DEFAULT_CHICK_LIFETIME = 5000;
 
-    // паттерн SINGLETON
-    public static class BirdManager {
-        private static BirdManager instance;
-        private java.util.List<Bird> birds;
-        private BirdManager() {
-            birds = new java.util.ArrayList<>();
-        }
-        public static BirdManager getInstance() {
-            if (instance == null) {
-                instance = new BirdManager();
-            }
-            return instance;
-        }
-        public void clear() {
-            birds.clear();
-        }
-    }
+    private Habitat habitat;
+    private Timer timer;
+    private long startTime;
+    private boolean running, showTime = true, showInfoEnabled = true;
 
-    // конструктор SimulationFrame
+    private SimulationPanel simPanel;
+    private JPanel controlPanel;
+    private JButton startButton, stopButton, currentObjectsButton;
+    private JCheckBox showInfoCheckBox;
+    private JRadioButton showTimeRadio, hideTimeRadio;
+    private JTextField adultPeriodField, chickPeriodField;
+    private JTextField adultLifetimeField, chickLifetimeField;
+    private JComboBox<String> probabilityComboBox;
+    private JList<String> probabilityList;
+
+    private AdultBirdAI adultAI;
+    private ChickAI chickAI;
+
+    // Консоль
+    private JDialog consoleDialog;
+    private JTextArea consoleArea;
+    private PipedWriter consoleWriter;
+    private ExecutorService consoleExecutor = Executors.newSingleThreadExecutor();
+
     public SimulationFrame() {
         super("Симуляция птиц");
         setSize(FRAME_WIDTH, FRAME_HEIGHT);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
-        setResizable(false);
         setLayout(new BorderLayout());
+        setResizable(false);
 
-        //  объект Habitat с параметрами (включая время жизни)
-        habitat = new Habitat(new Dimension(SIM_PANEL_WIDTH, SIM_PANEL_HEIGHT),
-                DEFAULT_ADULT_PERIOD, DEFAULT_ADULT_PROB, DEFAULT_CHICK_PERIOD,
-                DEFAULT_K_PERCENT, DEFAULT_ADULT_LIFETIME, DEFAULT_CHICK_LIFETIME);
+        loadConfig();
 
-        //  панель для рисования (центр)
         simPanel = new SimulationPanel();
         simPanel.setPreferredSize(new Dimension(SIM_PANEL_WIDTH, SIM_PANEL_HEIGHT));
         simPanel.setBackground(Color.WHITE);
         add(simPanel, BorderLayout.CENTER);
 
-        //  панель управления (справа)
         controlPanel = new JPanel();
         controlPanel.setLayout(new BoxLayout(controlPanel, BoxLayout.Y_AXIS));
         add(controlPanel, BorderLayout.EAST);
 
-        // панель для кнопок "Старт" и "Стоп"
-        JPanel buttonPanel = new JPanel();
+        initControlPanel();
+        createMenuAndToolBar();
+        initConsole();
+
+        addKeyListener(this);
+        setFocusable(true);
+        requestFocusInWindow();
+
+        timer = new Timer(UPDATE_INTERVAL, this);
+        running = false;
+
+        addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                saveConfig();
+                consoleExecutor.shutdownNow();
+            }
+        });
+    }
+
+    private void initControlPanel() {
+        JPanel bp = new JPanel();
         startButton = new JButton("Старт");
         stopButton = new JButton("Стоп");
         startButton.addActionListener(e -> startSimulation());
         stopButton.addActionListener(e -> stopSimulation());
-        buttonPanel.add(startButton);
-        buttonPanel.add(stopButton);
-        controlPanel.add(buttonPanel);
+        bp.add(startButton); bp.add(stopButton);
+        controlPanel.add(bp);
         controlPanel.add(Box.createVerticalStrut(10));
 
-        // переключатель Показывать информацию
         showInfoCheckBox = new JCheckBox("Показывать информацию", true);
-        showInfoEnabled = true;
         showInfoCheckBox.addActionListener(e -> showInfoEnabled = showInfoCheckBox.isSelected());
         controlPanel.add(showInfoCheckBox);
         controlPanel.add(Box.createVerticalStrut(10));
 
-        // группа радиокнопок для управления отображением времени
         showTimeRadio = new JRadioButton("Показывать время", true);
         hideTimeRadio = new JRadioButton("Скрывать время", false);
-        ButtonGroup timeGroup = new ButtonGroup();
-        timeGroup.add(showTimeRadio);
-        timeGroup.add(hideTimeRadio);
+        ButtonGroup tg = new ButtonGroup();
+        tg.add(showTimeRadio); tg.add(hideTimeRadio);
         showTimeRadio.addActionListener(e -> { showTime = true; simPanel.repaint(); });
         hideTimeRadio.addActionListener(e -> { showTime = false; simPanel.repaint(); });
         controlPanel.add(showTimeRadio);
         controlPanel.add(hideTimeRadio);
         controlPanel.add(Box.createVerticalStrut(10));
-        showTime = true;
 
-        // текстовые поля для ввода периодов генерации
         controlPanel.add(new JLabel("Период рождения взрослых (мс):"));
-        adultPeriodField = new JTextField(String.valueOf(DEFAULT_ADULT_PERIOD), 10);
+        adultPeriodField = new JTextField(String.valueOf(habitat.n1), 10);
         controlPanel.add(adultPeriodField);
         controlPanel.add(new JLabel("Период рождения птенцов (мс):"));
-        chickPeriodField = new JTextField(String.valueOf(DEFAULT_CHICK_PERIOD), 10);
+        chickPeriodField = new JTextField(String.valueOf(habitat.n2), 10);
         controlPanel.add(chickPeriodField);
         controlPanel.add(Box.createVerticalStrut(10));
 
-        // текстовые поля для времени жизни объектов
         controlPanel.add(new JLabel("Время жизни взрослых (мс):"));
-        adultLifetimeField = new JTextField(String.valueOf(DEFAULT_ADULT_LIFETIME), 10);
+        adultLifetimeField = new JTextField(String.valueOf(habitat.adultLifetime), 10);
         controlPanel.add(adultLifetimeField);
         controlPanel.add(new JLabel("Время жизни птенцов (мс):"));
-        chickLifetimeField = new JTextField(String.valueOf(DEFAULT_CHICK_LIFETIME), 10);
+        chickLifetimeField = new JTextField(String.valueOf(habitat.chickLifetime), 10);
         controlPanel.add(chickLifetimeField);
         controlPanel.add(Box.createVerticalStrut(10));
 
-        // вероятности генерации
-        String[] probOptions = {"10%", "20%", "30%", "40%", "50%", "60%", "70%", "80%", "90%", "100%"};
+        String[] probs = {"10%","20%","30%","40%","50%","60%","70%","80%","90%","100%"};
         controlPanel.add(new JLabel("Вероятность рождения взрослых:"));
-        probabilityComboBox = new JComboBox<>(probOptions);
-        probabilityComboBox.setSelectedItem("50%");
+        probabilityComboBox = new JComboBox<>(probs);
+        probabilityComboBox.setSelectedItem((int)(habitat.p1*100)+"%");
         controlPanel.add(probabilityComboBox);
         controlPanel.add(Box.createVerticalStrut(10));
 
         controlPanel.add(new JLabel("Вероятность (список):"));
-        probabilityList = new JList<>(probOptions);
+        probabilityList = new JList<>(probs);
         probabilityList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
-        probabilityList.setSelectedIndex(4);
-        JScrollPane listScrollPane = new JScrollPane(probabilityList);
-        listScrollPane.setPreferredSize(new Dimension(100, 80));
-        controlPanel.add(listScrollPane);
+        probabilityList.setSelectedValue((int)(habitat.p1*100)+"%", true);
+        JScrollPane sp = new JScrollPane(probabilityList);
+        sp.setPreferredSize(new Dimension(100,80));
+        controlPanel.add(sp);
         controlPanel.add(Box.createVerticalStrut(10));
 
-        // кнопка Текущие объекты
         currentObjectsButton = new JButton("Текущие объекты");
         currentObjectsButton.addActionListener(e -> showCurrentObjects());
         controlPanel.add(currentObjectsButton);
-        controlPanel.add(Box.createVerticalGlue());
+        controlPanel.add(Box.createVerticalStrut(10));
 
         // панель для управления потоками
         JPanel aiControlPanel = new JPanel(new GridLayout(2, 2, 5, 5));  // 2 строки, 2 столбца
@@ -179,270 +152,307 @@ public class SimulationFrame extends JFrame implements ActionListener, KeyListen
         JButton resumeAdultAIButton = new JButton("Возобновить взрослых");
         JButton pauseChickAIButton = new JButton("Пауза птенцов");
         JButton resumeChickAIButton = new JButton("Возобновить птенцов");
-
-        pauseAdultAIButton.addActionListener(e -> {
-            if (adultAI != null) {
-                adultAI.pause();
-                habitat.setGlobalAdultActive(false);
-            }
-        });
-        resumeAdultAIButton.addActionListener(e -> {
-            if (adultAI != null) {
-                adultAI.resumeThread();
-                habitat.setGlobalAdultActive(true);
-            }
-        });
-        pauseChickAIButton.addActionListener(e -> {
-            if (chickAI != null) {
-                chickAI.pause();
-                habitat.setGlobalChickActive(false);
-            }
-        });
-        resumeChickAIButton.addActionListener(e -> {
-            if (chickAI != null) {
-                chickAI.resumeThread();
-                habitat.setGlobalChickActive(true);
-            }
-        });
-
         aiControlPanel.add(pauseAdultAIButton);
         aiControlPanel.add(resumeAdultAIButton);
         aiControlPanel.add(pauseChickAIButton);
         aiControlPanel.add(resumeChickAIButton);
+
+        pauseAdultAIButton.addActionListener(e -> {
+            if (adultAI != null) { adultAI.pause(); habitat.setGlobalAdultActive(false); }
+        });
+        resumeAdultAIButton.addActionListener(e -> {
+            if (adultAI != null) { adultAI.resumeThread(); habitat.setGlobalAdultActive(true); }
+        });
+        pauseChickAIButton.addActionListener(e -> {
+            if (chickAI != null) { chickAI.pause(); habitat.setGlobalChickActive(false); }
+        });
+        resumeChickAIButton.addActionListener(e -> {
+            if (chickAI != null) { chickAI.resumeThread(); habitat.setGlobalChickActive(true); }
+        });
+
         controlPanel.add(aiControlPanel);
-        controlPanel.add(Box.createVerticalStrut(10));
-
-        // Панель для установки приоритетов потоков
-        String[] priorities = {"MIN", "NORM", "MAX"};
-        JComboBox<String> adultPriorityBox = new JComboBox<>(priorities);
-        JComboBox<String> chickPriorityBox = new JComboBox<>(priorities);
-        adultPriorityBox.setSelectedItem("NORM");
-        chickPriorityBox.setSelectedItem("NORM");
-        adultPriorityBox.addActionListener(e -> {
-            String sel = (String) adultPriorityBox.getSelectedItem();
-            if (adultAI != null) {
-                if ("MIN".equals(sel)) adultAI.setPriority(Thread.MIN_PRIORITY);
-                else if ("MAX".equals(sel)) adultAI.setPriority(Thread.MAX_PRIORITY);
-                else adultAI.setPriority(Thread.NORM_PRIORITY);
-            }
-        });
-        chickPriorityBox.addActionListener(e -> {
-            String sel = (String) chickPriorityBox.getSelectedItem();
-            if (chickAI != null) {
-                if ("MIN".equals(sel)) chickAI.setPriority(Thread.MIN_PRIORITY);
-                else if ("MAX".equals(sel)) chickAI.setPriority(Thread.MAX_PRIORITY);
-                else chickAI.setPriority(Thread.NORM_PRIORITY);
-            }
-        });
-        controlPanel.add(new JLabel("Приоритет взрослых:"));
-        controlPanel.add(adultPriorityBox);
-        controlPanel.add(new JLabel("Приоритет птенцов:"));
-        controlPanel.add(chickPriorityBox);
-
-        //  меню и панель инструментов
-        createMenuAndToolBar();
-
-        // Обработка клавиатуры: B (Старт), E (Стоп), T (Переключить время)
-        addKeyListener(this);
-        setFocusable(true);
-        requestFocusInWindow();
-
-        // Инициализируем таймер симуляции
-        timer = new Timer(UPDATE_INTERVAL, this);
-        running = false;
     }
 
-    //создание меню
     private void createMenuAndToolBar() {
-        menuBar = new JMenuBar();
-        JMenu simulationMenu = new JMenu("Симуляция");
+        JMenuBar menuBar = new JMenuBar();
+        JMenu fileMenu = new JMenu("Файл");
+        JMenuItem loadSim = new JMenuItem("Загрузить");
+        JMenuItem saveSim = new JMenuItem("Сохранить");
+        JMenuItem loadCfg = new JMenuItem("Загрузить конфиг");
+        JMenuItem saveCfg = new JMenuItem("Сохранить конфиг");
+        fileMenu.add(loadCfg);
+        fileMenu.add(saveCfg);
+        fileMenu.addSeparator();
+        fileMenu.add(loadSim);
+        fileMenu.add(saveSim);
+        menuBar.add(fileMenu);
+
+        JMenu simMenu = new JMenu("Симуляция");
         JMenuItem startItem = new JMenuItem("Старт");
         JMenuItem stopItem = new JMenuItem("Стоп");
         JMenuItem toggleTimeItem = new JMenuItem("Переключить время");
-        simulationMenu.add(startItem);
-        simulationMenu.add(stopItem);
-        simulationMenu.add(toggleTimeItem);
-        menuBar.add(simulationMenu);
+        simMenu.add(startItem); simMenu.add(stopItem); simMenu.add(toggleTimeItem);
+        menuBar.add(simMenu);
+
+        JMenu extraMenu = new JMenu("Дополнительно");
+        JMenuItem consoleItem = new JMenuItem("Консоль");
+        extraMenu.add(consoleItem);
+        menuBar.add(extraMenu);
+
         setJMenuBar(menuBar);
 
-        toolBar = new JToolBar();
-        JButton startToolButton = new JButton("Старт");
-        JButton stopToolButton = new JButton("Стоп");
-        JButton toggleTimeToolButton = new JButton("Переключить время");
-        toolBar.add(startToolButton);
-        toolBar.add(stopToolButton);
-        toolBar.add(toggleTimeToolButton);
+        JToolBar toolBar = new JToolBar();
+        JButton tStart = new JButton("Старт");
+        JButton tStop  = new JButton("Стоп");
+        JButton tToggle= new JButton("Переключить время");
+        toolBar.add(tStart); toolBar.add(tStop); toolBar.add(tToggle);
         add(toolBar, BorderLayout.NORTH);
 
+        loadCfg.addActionListener(e -> loadConfig());
+        saveCfg.addActionListener(e -> saveConfig());
+        loadSim.addActionListener(e -> loadSimulation());
+        saveSim.addActionListener(e -> saveSimulation());
         startItem.addActionListener(e -> startSimulation());
         stopItem.addActionListener(e -> stopSimulation());
-        toggleTimeItem.addActionListener(e -> {
-            showTime = !showTime;
-            showTimeRadio.setSelected(showTime);
-            hideTimeRadio.setSelected(!showTime);
-            simPanel.repaint();
+        toggleTimeItem.addActionListener(e -> toggleTime());
+        tStart.addActionListener(e -> startSimulation());
+        tStop.addActionListener(e -> stopSimulation());
+        tToggle.addActionListener(e -> toggleTime());
+        consoleItem.addActionListener(e -> consoleDialog.setVisible(true));
+    }
+
+    private void initConsole() {
+        consoleDialog = new JDialog(this, "Консоль", false);
+        consoleArea = new JTextArea(20, 40);
+        consoleArea.setLineWrap(true);
+        consoleArea.addKeyListener(new KeyAdapter() {
+            public void keyPressed(KeyEvent e) {
+                if (e.getKeyCode() == KeyEvent.VK_ENTER) {
+                    SwingUtilities.invokeLater(() -> {
+                        try {
+                            int start = consoleArea.getLineStartOffset(consoleArea.getLineCount() - 1);
+                            int end = consoleArea.getLineEndOffset(consoleArea.getLineCount() - 1);
+                            String cmd = consoleArea.getText().substring(start, end).trim();
+                            consoleWriter.write(cmd + "\n");
+                            consoleWriter.flush();
+                        } catch (Exception ex) {}
+                    });
+                }
+            }
         });
-        startToolButton.addActionListener(e -> startSimulation());
-        stopToolButton.addActionListener(e -> stopSimulation());
-        toggleTimeToolButton.addActionListener(e -> {
-            showTime = !showTime;
-            showTimeRadio.setSelected(showTime);
-            hideTimeRadio.setSelected(!showTime);
-            simPanel.repaint();
+        consoleDialog.add(new JScrollPane(consoleArea));
+        consoleDialog.pack();
+
+        try {
+            PipedReader pr = new PipedReader();
+            consoleWriter = new PipedWriter(pr);
+            consoleExecutor.submit(() -> {
+                BufferedReader br = new BufferedReader(pr);
+                String line;
+                while (true) {
+                    try {
+                        if (!((line = br.readLine()) != null)) break;
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                    processConsoleCommand(line);
+                }
+            });
+        } catch (IOException ex) {}
+    }
+
+    private void processConsoleCommand(String cmd) {
+        SwingUtilities.invokeLater(() -> {
+            if (cmd.startsWith("Изменить процент птенцов")) {
+                try {
+                    int v = Integer.parseInt(cmd.replaceAll("\\D+", ""));
+                    habitat.kPercent = v;
+                    consoleArea.append("\nПроцент птенцов установлен: " + v + "%\n");
+                } catch (Exception ex) {
+                    consoleArea.append("\nОшибка команды.\n");
+                }
+            } else {
+                consoleArea.append("\nНеизвестная команда.\n");
+            }
         });
     }
 
-    // запуск симуляции
+    private void toggleTime() {
+        showTime = !showTime;
+        showTimeRadio.setSelected(showTime);
+        hideTimeRadio.setSelected(!showTime);
+        simPanel.repaint();
+    }
+
     private void startSimulation() {
         if (running) return;
-
         try {
-            int adultPeriod = Integer.parseInt(adultPeriodField.getText());
-            int chickPeriod = Integer.parseInt(chickPeriodField.getText());
-            String probStr = (String) probabilityComboBox.getSelectedItem();
-            double adultProb = Double.parseDouble(probStr.replace("%", "")) / 100.0;
-            long adultLifetime = Long.parseLong(adultLifetimeField.getText());
-            long chickLifetime = Long.parseLong(chickLifetimeField.getText());
-
-            habitat = new Habitat(new Dimension(SIM_PANEL_WIDTH, SIM_PANEL_HEIGHT),
-                    adultPeriod, adultProb, chickPeriod, DEFAULT_K_PERCENT,
-                    adultLifetime, chickLifetime);
-        } catch (NumberFormatException ex) {
+            int ap = Integer.parseInt(adultPeriodField.getText());
+            int cp = Integer.parseInt(chickPeriodField.getText());
+            double pr = Double.parseDouble(((String) probabilityComboBox.getSelectedItem()).replace("%", "")) / 100.0;
+            long al = Long.parseLong(adultLifetimeField.getText());
+            long cl = Long.parseLong(chickLifetimeField.getText());
+            habitat = new Habitat(new Dimension(SIM_PANEL_WIDTH, SIM_PANEL_HEIGHT), ap, pr, cp, habitat.kPercent, al, cl);
+        } catch (Exception ex) {
             JOptionPane.showMessageDialog(this,
                     "Неверный формат ввода. Используются значения по умолчанию.",
                     "Ошибка ввода", JOptionPane.ERROR_MESSAGE);
-            adultPeriodField.setText(String.valueOf(DEFAULT_ADULT_PERIOD));
-            chickPeriodField.setText(String.valueOf(DEFAULT_CHICK_PERIOD));
-            adultLifetimeField.setText(String.valueOf(DEFAULT_ADULT_LIFETIME));
-            chickLifetimeField.setText(String.valueOf(DEFAULT_CHICK_LIFETIME));
         }
-
         running = true;
         startTime = System.currentTimeMillis();
         timer.start();
         startButton.setEnabled(false);
         stopButton.setEnabled(true);
-
-        //  Запуск потоков
         adultAI = new AdultBirdAI(habitat);
         chickAI = new ChickAI(habitat);
         adultAI.start();
         chickAI.start();
     }
 
-    //  остановка симуляции
     private void stopSimulation() {
-        if (running) {
-            timer.stop();
-            // Останавливаем потоки
-            if (adultAI != null) adultAI.stopAI();
-            if (chickAI != null) chickAI.stopAI();
+        if (!running) return;
+        timer.stop();
+        if (adultAI != null) adultAI.stopAI();
+        if (chickAI != null) chickAI.stopAI();
+        if (showInfoEnabled) showInfoDialog();
+        running = false;
+        startButton.setEnabled(true);
+        stopButton.setEnabled(false);
+        habitat.clear();
+        simPanel.repaint();
+    }
 
-            if (showInfoEnabled) {
-                JDialog infoDialog = new JDialog(this, "Статистика симуляции", true);
-                infoDialog.setLayout(new BorderLayout());
-                JTextArea statsArea = new JTextArea(habitat.getStatistics());
-                statsArea.setEditable(false);
-                infoDialog.add(new JScrollPane(statsArea), BorderLayout.CENTER);
-                JPanel buttonPanel = new JPanel();
-                JButton okButton = new JButton("ОК");
-                JButton cancelButton = new JButton("Отмена");
-                buttonPanel.add(okButton);
-                buttonPanel.add(cancelButton);
-                infoDialog.add(buttonPanel, BorderLayout.SOUTH);
-                infoDialog.setSize(400, 300);
-                infoDialog.setLocationRelativeTo(this);
+    private void showInfoDialog() {
+        JDialog dlg = new JDialog(this, "Статистика симуляции", true);
+        JTextArea ta = new JTextArea(habitat.getStatistics());
+        ta.setEditable(false);
+        dlg.add(new JScrollPane(ta), BorderLayout.CENTER);
+        JPanel bp = new JPanel();
+        JButton ok = new JButton("ОК");
+        ok.addActionListener(e -> dlg.dispose());
+        bp.add(ok);
+        dlg.add(bp, BorderLayout.SOUTH);
+        dlg.setSize(400, 300);
+        dlg.setLocationRelativeTo(this);
+        dlg.setVisible(true);
+    }
 
-                okButton.addActionListener(e -> {
-                    infoDialog.dispose();
-                    running = false;
-                    startButton.setEnabled(true);
-                    stopButton.setEnabled(false);
-                    BirdManager.getInstance().clear();
-                    habitat.clear();
-                    simPanel.repaint();
-                });
-                cancelButton.addActionListener(e -> {
-                    infoDialog.dispose();
-                    timer.start();
-                });
-                infoDialog.setVisible(true);
-            } else {
-                running = false;
-                startButton.setEnabled(true);
-                stopButton.setEnabled(false);
-                BirdManager.getInstance().clear();
-                habitat.clear();
+    private void loadSimulation() {
+        JFileChooser fc = new JFileChooser();
+        if (fc.showOpenDialog(this) == JFileChooser.APPROVE_OPTION) {
+            // Если что-то уже шло — остановим
+            stopSimulation();
+
+            try (ObjectInputStream ois = new ObjectInputStream(
+                    new FileInputStream(fc.getSelectedFile()))) {
+
+                // Восстанавливаем habitat из файла
+                habitat = (Habitat) ois.readObject();
+
+                // Если вы хотите сразу увидеть загруженный снимок:
                 simPanel.repaint();
+
+                // --- И (опционально) запустить симуляцию дальше ---
+                // Запомним, сколько уже было “прошло”:
+                long loadedSimTime = habitat.getSimulationTime();
+                // Выставляем стартовое смещение так,
+                // чтобы при следующем обновлении elapsed = текущее-время - startTime = loadedSimTime
+                startTime = System.currentTimeMillis() - loadedSimTime;
+
+                // Запускаем таймер и AI-потоки заново
+                running = true;
+                timer.start();
+                startButton.setEnabled(false);
+                stopButton.setEnabled(true);
+
+                adultAI = new AdultBirdAI(habitat);
+                chickAI = new ChickAI(habitat);
+                adultAI.start();
+                chickAI.start();
+
+            } catch (Exception ex) {
+                JOptionPane.showMessageDialog(this,
+                        "Ошибка загрузки: " + ex.getMessage(),
+                        "Ошибка", JOptionPane.ERROR_MESSAGE);
             }
         }
     }
 
-    // Обработка таймера
-    @Override
-    public void actionPerformed(ActionEvent e) {
+
+    private void saveSimulation() {
+        JFileChooser fc = new JFileChooser();
+        if (fc.showSaveDialog(this) == JFileChooser.APPROVE_OPTION) {
+            try (ObjectOutputStream oos = new ObjectOutputStream(new FileOutputStream(fc.getSelectedFile()))) {
+                oos.writeObject(habitat);
+            } catch (IOException ex) {
+                JOptionPane.showMessageDialog(this,
+                        "Ошибка сохранения: " + ex.getMessage(), "Ошибка", JOptionPane.ERROR_MESSAGE);
+            }
+        }
+    }
+
+    private void loadConfig() {
+        Properties p = new Properties();
+        try (FileReader r = new FileReader(CONFIG_FILE)) { p.load(r); } catch (IOException ignored) {}
+        int ap = Integer.parseInt(p.getProperty("adultPeriod", String.valueOf(DEFAULT_ADULT_PERIOD)));
+        int cp = Integer.parseInt(p.getProperty("chickPeriod", String.valueOf(DEFAULT_CHICK_PERIOD)));
+        double pr = Double.parseDouble(p.getProperty("adultProb", String.valueOf(DEFAULT_ADULT_PROB)));
+        int kp = Integer.parseInt(p.getProperty("kPercent", String.valueOf(DEFAULT_K_PERCENT)));
+        long al = Long.parseLong(p.getProperty("adultLifetime", String.valueOf(DEFAULT_ADULT_LIFETIME)));
+        long cl = Long.parseLong(p.getProperty("chickLifetime", String.valueOf(DEFAULT_CHICK_LIFETIME)));
+        habitat = new Habitat(new Dimension(SIM_PANEL_WIDTH, SIM_PANEL_HEIGHT), ap, pr, cp, kp, al, cl);
+    }
+
+    private void saveConfig() {
+        Properties p = new Properties();
+        p.setProperty("adultPeriod", String.valueOf(habitat.n1));
+        p.setProperty("chickPeriod", String.valueOf(habitat.n2));
+        p.setProperty("adultProb", String.valueOf(habitat.p1));
+        p.setProperty("kPercent", String.valueOf(habitat.kPercent));
+        p.setProperty("adultLifetime", String.valueOf(habitat.adultLifetime));
+        p.setProperty("chickLifetime", String.valueOf(habitat.chickLifetime));
+        try (FileWriter w = new FileWriter(CONFIG_FILE)) { p.store(w, "Simulation config"); } catch (IOException ignored) {}
+    }
+
+    @Override public void actionPerformed(ActionEvent e) {
         long elapsed = System.currentTimeMillis() - startTime;
         habitat.update(elapsed);
         simPanel.repaint();
     }
 
-    // Обработка клавиатуры
-    @Override
-    public void keyPressed(KeyEvent e) {
-        switch(e.getKeyCode()) {
-            case KeyEvent.VK_B:
-                startSimulation();
-                break;
-            case KeyEvent.VK_E:
-                stopSimulation();
-                break;
-            case KeyEvent.VK_T:
-                showTime = !showTime;
-                showTimeRadio.setSelected(showTime);
-                hideTimeRadio.setSelected(!showTime);
-                simPanel.repaint();
-                break;
+    @Override public void keyPressed(KeyEvent e) {
+        switch (e.getKeyCode()) {
+            case KeyEvent.VK_B: startSimulation(); break;
+            case KeyEvent.VK_E: stopSimulation(); break;
+            case KeyEvent.VK_T: toggleTime(); break;
         }
     }
-    @Override public void keyReleased(KeyEvent e) { }
-    @Override public void keyTyped(KeyEvent e) { }
+    @Override public void keyReleased(KeyEvent e) {}
+    @Override public void keyTyped(KeyEvent e) {}
 
-    // Панель визуализации
     class SimulationPanel extends JPanel {
-        @Override
-        protected void paintComponent(Graphics g) {
+        @Override protected void paintComponent(Graphics g) {
             super.paintComponent(g);
             habitat.draw(g, showTime);
         }
     }
 
-    // показ текущих объектов
     private void showCurrentObjects() {
-        HashMap<Integer, Long> btMap = habitat.getBirthTimeMap();
-        StringBuilder sb = new StringBuilder("Список текущих объектов (ID : Время рождения, сек):\n");
-        for (Integer id : btMap.keySet()) {
-            sb.append(id).append(" : ").append(btMap.get(id) / 1000.0).append("\n");
-        }
-        JDialog currentDialog = new JDialog(this, "Текущие объекты", true);
-        currentDialog.setLayout(new BorderLayout());
-        JTextArea textArea = new JTextArea(sb.toString());
-        textArea.setEditable(false);
-        currentDialog.add(new JScrollPane(textArea), BorderLayout.CENTER);
-        JButton okBtn = new JButton("ОК");
-        okBtn.addActionListener(e -> currentDialog.dispose());
-        JPanel pan = new JPanel();
-        pan.add(okBtn);
-        currentDialog.add(pan, BorderLayout.SOUTH);
-        currentDialog.setSize(300, 400);
-        currentDialog.setLocationRelativeTo(this);
-        currentDialog.setVisible(true);
+        HashMap<Integer, Long> map = habitat.getBirthTimeMap();
+        StringBuilder sb = new StringBuilder("ID : время рожд. (с)\n");
+        map.forEach((id, t) -> sb.append(id).append(" : ").append(t/1000.0).append("\n"));
+        JDialog d = new JDialog(this, "Текущие объекты", true);
+        JTextArea ta = new JTextArea(sb.toString());
+        ta.setEditable(false);
+        d.add(new JScrollPane(ta), BorderLayout.CENTER);
+        JButton ok = new JButton("ОК"); ok.addActionListener(e -> d.dispose());
+        d.add(ok, BorderLayout.SOUTH);
+        d.setSize(300, 400);
+        d.setLocationRelativeTo(this);
+        d.setVisible(true);
     }
 
-
     public static void main(String[] args) {
-        SwingUtilities.invokeLater(() -> {
-            SimulationFrame frame = new SimulationFrame();
-            frame.setVisible(true);
-        });
+        SwingUtilities.invokeLater(() -> new SimulationFrame().setVisible(true));
     }
 }

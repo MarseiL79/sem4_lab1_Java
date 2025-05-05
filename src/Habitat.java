@@ -1,23 +1,25 @@
 import java.awt.Graphics;
 import java.awt.Dimension;
+import java.io.Serializable;
+import java.util.Iterator;
 import java.util.LinkedList;
 import java.util.TreeSet;
 import java.util.HashMap;
-import java.util.Iterator;
 
-public class Habitat {
-    // Коллекция для хранения объектов (используем LinkedList)
+public class Habitat implements Serializable {
+    private static final long serialVersionUID = 1L;
+
     public static Dimension areaSize;
 
     // Параметры генерации для создания новых птиц
-    private int n1;         // период для взрослых птиц (мс)
-    private double p1;      // вероятность генерации взрослой птицы
-    private int n2;         // период для птенцов (мс)
-    private int kPercent;   // процентное соотношение птенцов к взрослым
+    int n1;         // период для взрослых птиц (мс)
+    double p1;      // вероятность генерации взрослой птицы
+    int n2;         // период для птенцов (мс)
+    public int kPercent;   // процентное соотношение птенцов к взрослым
 
     // Параметры времени жизни для объектов
-    private long adultLifetime;
-    private long chickLifetime;
+    long adultLifetime;
+    long chickLifetime;
 
     // Время симуляции (мс)
     private long simulationTime;
@@ -28,7 +30,7 @@ public class Habitat {
 
     // Вспомогательные коллекции:
     private LinkedList<Bird> birds;
-    private TreeSet<Integer> idSet;            // хранит уникальные идентификаторы
+    private TreeSet<Integer> idSet;              // хранит уникальные идентификаторы
     private HashMap<Integer, Long> birthTimeMap; // хранит соответствие id -> время рождения
 
     // Флаги, используется ли глобальное движение (стаевое)
@@ -38,10 +40,9 @@ public class Habitat {
     private double globalAdultAngle = Math.PI / 4; // начальное значение – 45 градусов
     private double globalChickAngle = Math.PI / 4;
 
-    // конструктор
     public Habitat(Dimension areaSize, int n1, double p1, int n2, int kPercent,
                    long adultLifetime, long chickLifetime) {
-        this.areaSize = areaSize;
+        Habitat.areaSize = areaSize;
         this.n1 = n1;
         this.p1 = p1;
         this.n2 = n2;
@@ -56,39 +57,25 @@ public class Habitat {
         this.birthTimeMap = new HashMap<>();
     }
 
+    // --- геттеры/сеттеры для глобальных флагов и углов ---
+    public void setGlobalAdultActive(boolean active) { globalAdultActive = active; }
+    public void setGlobalChickActive(boolean active) { globalChickActive = active; }
+    public boolean isGlobalAdultActive() { return globalAdultActive; }
+    public boolean isGlobalChickActive() { return globalChickActive; }
+    public double getGlobalAdultAngle() { return globalAdultAngle; }
+    public double getGlobalChickAngle() { return globalChickAngle; }
 
-    public void setGlobalAdultActive(boolean active) {
-        globalAdultActive = active;
-    }
-
-    public void setGlobalChickActive(boolean active) {
-        globalChickActive = active;
-    }
-
-    public boolean isGlobalAdultActive() {
-        return globalAdultActive;
-    }
-
-    public boolean isGlobalChickActive() {
-        return globalChickActive;
-    }
-
-    public double getGlobalAdultAngle() {
-        return globalAdultAngle;
-    }
-
-    public double getGlobalChickAngle() {
-        return globalChickAngle;
-    }
-
-    // обновление глобальных углов движения
     public void updateGlobalAngles() {
         double newAngle = Math.random() * 2 * Math.PI;
         globalAdultAngle = newAngle;
         globalChickAngle = newAngle;
     }
 
-    // генерация уникального идентификатора
+    public long getSimulationTime() {
+        return simulationTime;
+    }
+
+
     private int generateUniqueId() {
         int id;
         do {
@@ -97,15 +84,13 @@ public class Habitat {
         return id;
     }
 
-    // обновление симуляции
     public void update(long elapsedTime) {
         simulationTime = elapsedTime;
 
-        // Генерация взрослой птицы
+        // Генерация взрослых
         if (simulationTime - lastAdultTime >= n1) {
             if (Math.random() < p1) {
                 int id = generateUniqueId();
-                // Создаем взрослую птицу с текущим временем рождения и заданным временем жизни
                 AdultBird adult = new AdultBird(randomX(), randomY(), simulationTime, adultLifetime, id);
                 birds.add(adult);
                 idSet.add(id);
@@ -114,7 +99,7 @@ public class Habitat {
             lastAdultTime = simulationTime;
         }
 
-        // Генерация птенца
+        // Генерация птенцов
         if (simulationTime - lastChickTime >= n2) {
             int adultCount = (int) birds.stream().filter(b -> b instanceof AdultBird).count();
             int chickCount = (int) birds.stream().filter(b -> b instanceof Chick).count();
@@ -128,7 +113,7 @@ public class Habitat {
             lastChickTime = simulationTime;
         }
 
-        // Удаление объектов, время жизни которых истекло
+        // Удаление старых
         Iterator<Bird> iter = birds.iterator();
         while (iter.hasNext()) {
             Bird bird = iter.next();
@@ -139,25 +124,19 @@ public class Habitat {
             }
         }
 
-        // Обновление движения птиц:
-        // Если глобальное движение активно, то применяется глобальный угол,
-        // иначе вызывается индивидуальное обновление (метод update())
+        // Движение
         for (Bird bird : birds) {
             if (bird instanceof AdultBird && globalAdultActive) {
-                // Движение по глобальному углу
                 bird.x += (int)(5 * Math.cos(globalAdultAngle));
                 bird.y += (int)(5 * Math.sin(globalAdultAngle));
             } else if (bird instanceof Chick && globalChickActive) {
-                // Движение по глобальному углу
                 bird.x += (int)(3 * Math.cos(globalChickAngle));
                 bird.y += (int)(3 * Math.sin(globalChickAngle));
             } else {
-                // (хаотичное движение)
                 bird.update(elapsedTime);
             }
         }
     }
-
 
     public void draw(Graphics g, boolean showTime) {
         for (Bird bird : birds) {
@@ -168,30 +147,22 @@ public class Habitat {
         }
     }
 
-
     public void clear() {
         birds.clear();
         idSet.clear();
         birthTimeMap.clear();
     }
 
-
     public String getStatistics() {
         int adultCount = (int) birds.stream().filter(b -> b instanceof AdultBird).count();
         int chickCount = (int) birds.stream().filter(b -> b instanceof Chick).count();
-        return "Взрослых птиц: " + adultCount + ", птенцов: " + chickCount +
+        return "Взрослых птиц: " + adultCount +
+                ", птенцов: " + chickCount +
                 ", время симуляции: " + simulationTime / 1000.0 + " сек.";
     }
 
-
-    private int randomX() {
-        return (int)(Math.random() * areaSize.width);
-    }
-
-    private int randomY() {
-        return (int)(Math.random() * areaSize.height);
-    }
-
+    private int randomX() { return (int)(Math.random() * areaSize.width); }
+    private int randomY() { return (int)(Math.random() * areaSize.height); }
 
     public HashMap<Integer, Long> getBirthTimeMap() {
         return birthTimeMap;

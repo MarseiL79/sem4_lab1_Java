@@ -3,6 +3,7 @@ import java.awt.Graphics;
 import java.awt.Image;
 import java.io.IOException;
 import java.io.ObjectInputStream;
+import java.io.Serial;
 import java.io.Serializable;
 
 public abstract class Bird implements IBehaviour, Serializable {

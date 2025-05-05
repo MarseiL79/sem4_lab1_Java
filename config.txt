@@ -1,8 +1,7 @@
-#Simulation config
-#Sun May 04 23:03:59 NOVT 2025
+#Mon May 05 18:20:49 NOVT 2025
 adultLifetime=10000
-adultPeriod=2000
+adultPeriod=200
 adultProb=0.5
 chickLifetime=5000
-chickPeriod=3000
+chickPeriod=300
 kPercent=30

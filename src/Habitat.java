@@ -45,6 +45,10 @@ public class Habitat implements Serializable {
     public void setGlobalAdultActive(boolean a){globalAdultActive=a;}
     public void setGlobalChickActive(boolean a){globalChickActive=a;}
 
+    public void addAllBirds(List<Bird> newBirds) {
+        birds.addAll(newBirds);
+    }
+
     public long getSimulationTime(){return simulationTime;}
     public HashMap<Integer,Long> getBirthTimeMap(){return birthTimeMap;}
 

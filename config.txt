@@ -1,7 +1,7 @@
-#Mon May 05 18:20:49 NOVT 2025
+#Thu May 15 23:12:06 NOVT 2025
 adultLifetime=10000
-adultPeriod=200
+adultPeriod=1000
 adultProb=0.5
-chickLifetime=5000
-chickPeriod=300
-kPercent=30
+chickLifetime=10000
+chickPeriod=1000
+kPercent=100
